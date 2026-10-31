@@ -1,5 +1,3 @@
-import { syncDueConnections } from './sync'
-
 // ---------------------------------------------------------------------------
 // Auto-synchronization scheduler.
 //
@@ -19,6 +17,9 @@ async function tick() {
   if (tickRunning) return
   tickRunning = true
   try {
+    // Load the sync engine only when the timer fires, after the application
+    // and Prisma environment have been initialized.
+    const { syncDueConnections } = await import('./sync')
     await syncDueConnections()
   } catch (e) {
     console.error('[marketplace-scheduler] tick failed:', e instanceof Error ? e.message : e)
