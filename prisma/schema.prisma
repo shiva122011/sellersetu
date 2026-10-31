@@ -1,0 +1,599 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// USERS & ROLES
+// role: CUSTOMER | SUPER_ADMIN | ADMIN | OPS_MANAGER | SALES_EXEC |
+//       PROJECT_MANAGER | EMPLOYEE | VENDOR
+// Staff = any of SUPER_ADMIN/ADMIN/OPS_MANAGER/SALES_EXEC/PROJECT_MANAGER/EMPLOYEE
+// =============================================================================
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  phone        String?
+  company      String?
+  role         String   @default("CUSTOMER")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  requests           ServiceRequest[]       @relation("CustomerRequests")
+  assigned           ServiceRequest[]       @relation("AssignedRequests")
+  vendorRequests     ServiceRequest[]       @relation("RequestVendor")
+  assignedTasks      ProjectTask[]
+  messages           Message[]
+  notifications      Notification[]
+  activityLogs       ActivityLog[]
+  statusUpdates      RequestStatusHistory[]
+  documents          Document[]             @relation("UploadedDocs")
+  refundsInitiated   Refund[]               @relation("RefundsInitiated")
+  refundsDecided     Refund[]               @relation("RefundsDecided")
+  credentialsShared  CredentialShare[]      @relation("CredentialsShared")
+  quotationsCreated  Quotation[]            @relation("QuotationsCreated")
+  vendorProfile      VendorProfile?
+  vendorConnections  VendorConnection[]
+  vendorProjects     Project[]              @relation("VendorProjects")
+  documentsRequested DocumentRequest[]      @relation("DocsRequestedBy")
+  settingsUpdated    SystemSetting[]        @relation("SettingsUpdated")
+  pagesUpdated       CmsPage[]              @relation("PagesUpdated")
+}
+
+// =============================================================================
+// UNIVERSAL SERVICE CATALOG — fully admin-managed, no source-code changes needed
+// =============================================================================
+model ServiceCategory {
+  id          String   @id @default(cuid())
+  code        String   @unique // A..P (display order code)
+  slug        String   @unique
+  name        String
+  description String   @default("")
+  icon        String   @default("layers") // lucide icon name
+  featured    Boolean  @default(false) // show in homepage highlights
+  faqs        String   @default("[]") // JSON [{q,a}] — category-level FAQ shown on service detail pages
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subcategories ServiceSubcategory[]
+  services      Service[]
+}
+
+model ServiceSubcategory {
+  id         String          @id @default(cuid())
+  categoryId String
+  category   ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  slug       String
+  name       String
+  sortOrder  Int             @default(0)
+  active     Boolean         @default(true)
+
+  services Service[]
+
+  @@index([categoryId])
+}
+
+// executionType: IN_HOUSE | THIRD_PARTY_MANAGED | DIRECT_CONNECTION | HYBRID
+// status: AVAILABLE (requestable) | COMING_SOON (listed for discovery only)
+// NO public pricing anywhere — every commercial term originates from quotations.
+model Service {
+  id              String              @id @default(cuid())
+  categoryId      String
+  category        ServiceCategory     @relation(fields: [categoryId], references: [id])
+  subcategoryId   String?
+  subcategory     ServiceSubcategory? @relation(fields: [subcategoryId], references: [id])
+  name            String
+  slug            String              @unique
+  description     String
+  scopeExamples   String              @default("[]") // JSON string array
+  deliverables    String              @default("[]") // JSON string array
+  process         String              @default("[]") // JSON [{t,d}] — delivery process steps shown on the public detail page
+  executionType   String              @default("IN_HOUSE")
+  status          String              @default("AVAILABLE")
+  featured        Boolean             @default(false)
+  timeline        String              @default("") // indicative timeline label (not a price)
+  formConfig      String              @default("{\"fields\":[]}") // JSON FormConfig — dynamic per-service fields
+  docRequirements String              @default("{\"documents\":[]}") // JSON { documents: DocRequirement[] }
+  icon            String              @default("briefcase")
+  active          Boolean             @default(true)
+  displayOrder    Int                 @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  requests ServiceRequest[]
+
+  @@index([categoryId])
+  @@index([subcategoryId])
+}
+
+// =============================================================================
+// SERVICE REQUESTS — universal intake incl. custom "not listed" services
+// =============================================================================
+// stage: REQUEST | QUOTATION | EXECUTION | COMPLETION (denormalized for filtering)
+// status machine defined in src/lib/constants.ts
+// executionModel: per-request override of the service default
+model ServiceRequest {
+  id                   String @id @default(cuid())
+  requestCode          String @unique // SR-2026-00001
+  customerId           String
+  customer             User   @relation("CustomerRequests", fields: [customerId], references: [id])
+  title                String // project title
+  description          String // detailed requirement
+  expectedDeliverables String @default("")
+  preferredTimeline    String @default("")
+  projectLocation      String @default("")
+  additionalNotes      String @default("")
+
+  // catalog link — null when this is a custom "Other / not listed" request
+  serviceId      String?
+  service        Service? @relation(fields: [serviceId], references: [id])
+  customCategory String? // free-text category for custom requests
+  formResponses  String   @default("{}") // JSON answers to the service's dynamic fields
+
+  draft    Boolean @default(false)
+  stage    String  @default("REQUEST")
+  status   String  @default("SUBMITTED")
+  progress Int     @default(0) // derived from milestones once a project exists
+
+  executionModel String  @default("IN_HOUSE")
+  assignedToId   String?
+  assignedTo     User?   @relation("AssignedRequests", fields: [assignedToId], references: [id])
+  vendorId       String? // executing vendor (managed or direct connection)
+  vendor         User?   @relation("RequestVendor", fields: [vendorId], references: [id])
+
+  internalNotes String? // staff-only notes
+  pendingAction String? // next action required from the customer
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  documents         Document[]
+  payments          Payment[]
+  refunds           Refund[]
+  credentials       CredentialShare[]
+  messages          Message[]
+  statusHistory     RequestStatusHistory[]
+  tasks             PendingTask[]
+  documentRequests  DocumentRequest[]
+  quotations        Quotation[]
+  project           Project?
+  vendorConnections VendorConnection[]
+  invoices          Invoice[]
+}
+
+// =============================================================================
+// QUOTATIONS & NEGOTIATION — the ONLY source of commercial terms
+// =============================================================================
+model Quotation {
+  id                String         @id @default(cuid())
+  quotationNo       String         @unique // QT-2026-00001
+  requestId         String
+  request           ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  version           Int            @default(1)
+  parentQuotationId String?
+  status            String         @default("DRAFT") // DRAFT | SENT | NEGOTIATION | REVISION_REQUESTED | ACCEPTED | REJECTED | SUPERSEDED | EXPIRED
+  scope             String         @default("")
+  deliverablesNote  String         @default("")
+  timelineNote      String         @default("")
+  paymentTerms      String         @default("50% advance on acceptance, 50% on delivery") // free text, fully configurable
+  notes             String         @default("") // customer-visible notes
+  internalNotes     String? // staff-only
+  subtotal          Float          @default(0)
+  taxLabel          String         @default("GST")
+  taxRatePct        Float          @default(0)
+  taxAmount         Float          @default(0)
+  total             Float          @default(0)
+  validUntil        DateTime?
+  lockedAt          DateTime? // set when ACCEPTED — commercial record is locked
+  customerNote      String? // customer's revision/negotiation note
+  acceptedAt        DateTime?
+  sentAt            DateTime?
+  createdById       String?
+  createdBy         User?          @relation("QuotationsCreated", fields: [createdById], references: [id])
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  items    QuotationItem[]
+  payments Payment[]
+  invoices Invoice[]
+
+  @@index([requestId])
+}
+
+model QuotationItem {
+  id          String    @id @default(cuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  description String
+  detail      String    @default("")
+  quantity    Float     @default(1)
+  unit        String    @default("lot") // lot | pages | hrs | pcs | mo | job
+  unitPrice   Float     @default(0)
+  amount      Float     @default(0)
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([quotationId])
+}
+
+// =============================================================================
+// PROJECTS, MILESTONES & TASKS — execution tracking
+// =============================================================================
+model Project {
+  id              String         @id @default(cuid())
+  requestId       String         @unique
+  request         ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  status          String         @default("ASSIGNED")
+  executionModel  String         @default("IN_HOUSE")
+  vendorId        String?
+  vendor          User?          @relation("VendorProjects", fields: [vendorId], references: [id])
+  startedAt       DateTime?
+  expectedEndDate DateTime?
+  completedAt     DateTime?
+  progressPct     Int            @default(0) // computed from milestone weights
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  milestones Milestone[]
+  tasks      ProjectTask[]
+
+  @@index([vendorId])
+}
+
+model Milestone {
+  id                 String    @id @default(cuid())
+  projectId          String
+  project            Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title              String
+  description        String    @default("")
+  weight             Int       @default(0) // percent contribution to overall progress
+  amount             Float     @default(0) // milestone billing amount (from quotation terms)
+  dueDate            DateTime?
+  status             String    @default("PENDING") // PENDING | IN_PROGRESS | DONE | APPROVED
+  completedAt        DateTime?
+  sortOrder          Int       @default(0)
+  // Vendor payout tracking — staff sets the payout amount (managed execution),
+  // then releases it once the milestone is verified. Never shown to customers.
+  vendorPayoutAmount Float? // vendor's payout for this milestone; null = to be confirmed
+  payoutStatus       String    @default("PENDING") // PENDING | RELEASED
+  payoutReleasedAt   DateTime?
+  payoutNote         String    @default("") // payment reference e.g. NEFT UTR / UPI ref
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  payments Payment[]
+
+  @@index([projectId])
+}
+
+model ProjectTask {
+  id         String    @id @default(cuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title      String
+  detail     String    @default("")
+  assigneeId String?
+  assignee   User?     @relation(fields: [assigneeId], references: [id])
+  status     String    @default("TODO") // TODO | IN_PROGRESS | BLOCKED | DONE | CANCELLED
+  dueDate    DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([assigneeId])
+}
+
+// =============================================================================
+// VENDORS — third-party providers (managed execution or direct connection)
+// =============================================================================
+model VendorProfile {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName        String
+  logoUrl             String    @default("") // company logo image path/URL shown on vendor cards & profiles
+  contactPerson       String    @default("")
+  phone               String    @default("")
+  website             String    @default("")
+  description         String    @default("")
+  expertise           String    @default("[]") // JSON string array of service areas
+  serviceLocations    String    @default("[]") // JSON string array of cities/regions
+  gstin               String    @default("")
+  address             String    @default("") // registered business address
+  city                String    @default("")
+  state               String    @default("")
+  // Payout channel — used by the platform team to release vendor payments.
+  // Staff-only visibility (never shown to customers).
+  payoutMode          String    @default("") // "" = not set | BANK | UPI
+  payoutAccountName   String    @default("")
+  payoutAccountNumber String    @default("")
+  payoutIfsc          String    @default("")
+  payoutUpiId         String    @default("")
+  status              String    @default("PENDING") // PENDING | APPROVED | REJECTED | SUSPENDED
+  rating              Float     @default(0)
+  completedProjects   Int       @default(0)
+  reviewNote          String? // admin decision note
+  approvedById        String?
+  approvedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+// Vendor engagement on a request — either managed execution or a direct connection
+model VendorConnection {
+  id             String         @id @default(cuid())
+  requestId      String
+  request        ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  vendorId       String
+  vendor         User           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  model          String         @default("DIRECT_CONNECTION") // DIRECT_CONNECTION | MANAGED
+  status         String         @default("PROPOSED") // PROPOSED | AUTHORIZED | ACTIVE | COMPLETED | CANCELLED
+  connectionFee  Float          @default(0) // platform fee for direct connections
+  managedFeeNote String         @default("") // internal commercial note for managed services
+  feePaid        Boolean        @default(false)
+  authorizedAt   DateTime?
+  completedAt    DateTime?
+  notes          String         @default("")
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([requestId])
+  @@index([vendorId])
+}
+
+// =============================================================================
+// DOCUMENTS — submissions, template checklists and staff-initiated requests
+// =============================================================================
+// source: TEMPLATE (from service docRequirements) | STAFF (requested by team) | SUBMISSION (voluntary upload)
+model DocumentRequest {
+  id            String         @id @default(cuid())
+  requestId     String
+  request       ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  title         String
+  description   String         @default("")
+  category      String         @default("OTHER")
+  mandatory     Boolean        @default(true)
+  source        String         @default("STAFF")
+  status        String         @default("PENDING") // PENDING | SUBMITTED | APPROVED | REJECTED | WAIVED
+  dueDate       DateTime?
+  reviewNote    String? // rejection reason / review comment
+  requestedById String?
+  requestedBy   User?          @relation("DocsRequestedBy", fields: [requestedById], references: [id])
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  documents Document[]
+
+  @@index([requestId])
+}
+
+model Document {
+  id                String           @id @default(cuid())
+  requestId         String
+  request           ServiceRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  name              String // display name
+  fileName          String // stored file name on disk
+  mimeType          String
+  size              Int
+  category          String           @default("OTHER")
+  status            String           @default("SUBMITTED") // SUBMITTED | APPROVED | REJECTED | SHARED
+  reviewNote        String?
+  isDeliverable     Boolean          @default(false) // final work output shared with customer
+  version           Int              @default(1)
+  documentRequestId String?
+  documentRequest   DocumentRequest? @relation(fields: [documentRequestId], references: [id], onDelete: SetNull)
+  uploadedById      String?
+  uploadedBy        User?            @relation("UploadedDocs", fields: [uploadedById], references: [id])
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+}
+
+// =============================================================================
+// PAYMENTS & INVOICES — amounts originate ONLY from accepted quotations
+// or authorized billing actions. No public price exists anywhere.
+// type: ADVANCE | MILESTONE | FINAL | CONNECTION_FEE | MANAGED_SERVICE | CUSTOM
+// =============================================================================
+model Payment {
+  id            String         @id @default(cuid())
+  requestId     String
+  request       ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  quotationId   String?
+  quotation     Quotation?     @relation(fields: [quotationId], references: [id])
+  milestoneId   String?
+  milestone     Milestone?     @relation(fields: [milestoneId], references: [id])
+  type          String // ADVANCE | MILESTONE | FINAL | CONNECTION_FEE | MANAGED_SERVICE | CUSTOM
+  label         String         @default("") // human label e.g. "Advance (30%)"
+  amount        Float
+  status        String         @default("PENDING") // PENDING | PAID | FAILED | REFUNDED
+  method        String? // UPI | CARD | NETBANKING | BANK_TRANSFER | OTHER
+  transactionId String?
+  receiptNo     String?
+  paidAt        DateTime?
+  note          String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Invoice {
+  id          String         @id @default(cuid())
+  invoiceNo   String         @unique // INV-2026-00001
+  requestId   String
+  request     ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  paymentId   String?
+  quotationId String?
+  quotation   Quotation?     @relation(fields: [quotationId], references: [id])
+  type        String         @default("TAX_INVOICE") // TAX_INVOICE | RECEIPT | PROFORMA
+  description String         @default("")
+  amount      Float // pre-tax
+  gstRatePct  Float          @default(0)
+  gstAmount   Float          @default(0)
+  totalAmount Float
+  billToName  String
+  billToGstin String?
+  status      String         @default("ISSUED") // ISSUED | PAID | CANCELLED
+  notes       String?
+  issuedById  String?
+  issuedAt    DateTime       @default(now())
+  createdAt   DateTime       @default(now())
+
+  @@index([requestId])
+}
+
+// =============================================================================
+// COMMUNICATION, WORKFLOW & AUDIT
+// =============================================================================
+model RequestStatusHistory {
+  id          String         @id @default(cuid())
+  requestId   String
+  request     ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  status      String
+  stage       String
+  progress    Int
+  note        String?
+  createdById String?
+  createdBy   User?          @relation(fields: [createdById], references: [id])
+  createdAt   DateTime       @default(now())
+}
+
+// Chat is request-scoped. isInternal messages are staff-only and never visible
+// to customers or vendors. Vendors may participate only on requests where they
+// have an authorized connection.
+model Message {
+  id         String         @id @default(cuid())
+  requestId  String
+  request    ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  senderId   String
+  sender     User           @relation(fields: [senderId], references: [id])
+  content    String
+  isInternal Boolean        @default(false)
+  isRead     Boolean        @default(false)
+  createdAt  DateTime       @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestId String?
+  title     String
+  body      String
+  type      String   @default("INFO") // INFO | STATUS | QUOTATION | PROJECT | PAYMENT | DOCUMENT | MESSAGE | REFUND | VENDOR | CREDENTIAL
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// Pending customer actions (appears on customer dashboard "Pending actions")
+model PendingTask {
+  id        String         @id @default(cuid())
+  requestId String
+  request   ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  title     String
+  detail    String?
+  owner     String         @default("CUSTOMER") // CUSTOMER | TEAM
+  isDone    Boolean        @default(false)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  requestId String?
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+}
+
+// Refund / adjustment records against payments
+model Refund {
+  id            String         @id @default(cuid())
+  requestId     String
+  request       ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  amount        Float
+  reason        String
+  policyNote    String?
+  status        String         @default("REQUESTED") // REQUESTED | PROCESSED | REJECTED
+  decisionNote  String?
+  initiatedById String?
+  initiatedBy   User?          @relation("RefundsInitiated", fields: [initiatedById], references: [id])
+  decidedById   String?
+  decidedBy     User?          @relation("RefundsDecided", fields: [decidedById], references: [id])
+  processedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+// Encrypted credential vault for account-management type engagements
+model CredentialShare {
+  id             String         @id @default(cuid())
+  requestId      String
+  request        ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  title          String
+  hint           String?
+  cipherText     String
+  iv             String
+  authTag        String
+  status         String         @default("ACTIVE") // ACTIVE | REVOKED
+  accessCount    Int            @default(0)
+  lastAccessedAt DateTime?
+  createdById    String?
+  createdBy      User?          @relation("CredentialsShared", fields: [createdById], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+// =============================================================================
+// CMS & SYSTEM SETTINGS — everything editable from the admin backend
+// =============================================================================
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @default("")
+  label       String?
+  category    String   @default("GENERAL") // GENERAL | FINANCE | CMS | WORKFLOW
+  updatedById String?
+  updatedBy   User?    @relation("SettingsUpdated", fields: [updatedById], references: [id])
+  updatedAt   DateTime @updatedAt
+}
+
+// Editable content pages: how-it-works | about | privacy | terms | contact notes
+model CmsPage {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  title           String
+  content         String   @default("") // markdown-style plain text
+  metaTitle       String?
+  metaDescription String?
+  updatedById     String?
+  updatedBy       User?    @relation("PagesUpdated", fields: [updatedById], references: [id])
+  updatedAt       DateTime @updatedAt
+}
+
+model Faq {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  category  String   @default("General")
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Testimonial {
+  id        String   @id @default(cuid())
+  name      String
+  role      String   @default("") // e.g. "Founder, Sharma Textiles"
+  logoUrl   String   @default("") // company logo shown on the testimonial card
+  quote     String
+  rating    Int      @default(5)
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+}
