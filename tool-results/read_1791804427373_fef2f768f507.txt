@@ -1,0 +1,476 @@
+     1→/**
+     2→ * Seed script for SellerSetu demo data — dynamic services edition.
+     3→ * Run: bun scripts/seed.ts
+     4→ */
+     5→import { PrismaClient } from '@prisma/client'
+     6→import bcrypt from 'bcryptjs'
+     7→import crypto from 'crypto'
+     8→import { writeFile, mkdir } from 'fs/promises'
+     9→import path from 'path'
+    10→
+    11→const db = new PrismaClient()
+    12→const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
+    13→
+    14→// Same AES-256-GCM scheme as src/lib/crypto.ts
+    15→function encryptVault(payload: Record<string, string>) {
+    16→  const secret = process.env.AUTH_SECRET || 'sellersetu-dev-secret-change-in-production'
+    17→  const key = crypto.scryptSync(secret, 'sellersetu-credential-vault-v1', 32)
+    18→  const iv = crypto.randomBytes(12)
+    19→  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+    20→  const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()])
+    21→  return {
+    22→    cipherText: encrypted.toString('base64'),
+    23→    iv: iv.toString('base64'),
+    24→    authTag: cipher.getAuthTag().toString('base64'),
+    25→  }
+    26→}
+    27→
+    28→// ---------------------------------------------------------------- configs
+    29→
+    30→const CONTINUING = 'Continuing an existing / pending process'
+    31→const FRESH = 'Starting a fresh registration'
+    32→
+    33→const accountCreation = {
+    34→  name: 'Account Creation',
+    35→  description:
+    36→    'End-to-end seller account registration on Amazon, Flipkart, Meesho and more — GST validation, bank mapping, brand registry guidance and launch-ready storefront settings.',
+    37→  pricingModel: 'ONE_TIME',
+    38→  workflowType: 'STANDARD',
+    39→  duration: '7-10 business days',
+    40→  features: JSON.stringify(['Full KYC & GST handling', 'Brand registry guidance', 'Shipping & tax settings', 'First catalog review']),
+    41→  icon: 'store',
+    42→  formConfig: {
+    43→    fields: [
+    44→      { id: 'platform', type: 'select', label: 'Which platform do you want to sell on?', required: true, options: ['Amazon', 'Flipkart', 'Meesho', 'JioMart', 'Other'] },
+    45→      { id: 'registration_type', type: 'radio', label: 'Are you starting a fresh registration or continuing an existing / pending process?', required: true, options: [FRESH, CONTINUING] },
+    46→      { id: 'existing_platform', type: 'select', label: 'Where did you start the earlier process?', required: true, options: ['Amazon Seller Central', 'Flipkart Seller Hub', 'Meesho Supplier Panel', 'Somewhere else'], showIf: { fieldId: 'registration_type', values: [CONTINUING] } },
+    47→      { id: 'existing_progress', type: 'textarea', label: 'Which steps are already completed? (email verified, GST added, bank added…)', required: true, showIf: { fieldId: 'registration_type', values: [CONTINUING] } },
+    48→      { id: 'existing_reference', type: 'text', label: 'Previous application / case reference (optional)', required: false, showIf: { fieldId: 'registration_type', values: [CONTINUING] } },
+    49→      { id: 'has_gstin', type: 'radio', label: 'Do you have a GSTIN for this business?', required: true, options: ['Yes', 'No'], showIf: { fieldId: 'registration_type', values: [FRESH] } },
+    50→      { id: 'brand_name', type: 'text', label: 'Brand / store name', required: true },
+    51→      { id: 'trademark', type: 'select', label: 'Do you have a registered trademark?', required: true, options: ['Yes, registered', 'Applied / pending', 'No'] },
+    52→      { id: 'brand_logo_file', type: 'file', label: 'Attach your brand logo (optional)', required: false },
+    53→    ],
+    54→  },
+    55→  docRequirements: {
+    56→    documents: [
+    57→      { id: 'pan_card', label: 'PAN Card of business owner', category: 'PAN', mandatory: true, description: 'Clear scan of the PAN issued in the owner’s name' },
+    58→      { id: 'aadhaar_card', label: 'Aadhaar Card of business owner', category: 'AADHAAR', mandatory: true, description: 'Both sides, name must match the PAN' },
+    59→      { id: 'gst_certificate', label: 'GST Registration Certificate', category: 'GST', mandatory: false, description: 'Needed if you selected “Yes” for GSTIN' },
+    60→      { id: 'bank_proof', label: 'Cancelled cheque or bank statement', category: 'BANK', mandatory: true, description: 'Must show account number, IFSC and account holder name' },
+    61→      { id: 'address_proof', label: 'Business address proof', category: 'ADDRESS', mandatory: false },
+    62→      { id: 'brand_logo', label: 'Brand logo file', category: 'LOGO', mandatory: false },
+    63→      { id: 'previous_docs', label: 'Previously submitted documents (continuing cases)', category: 'OTHER', mandatory: false, showIf: { fieldId: 'registration_type', values: [CONTINUING] } },
+    64→    ],
+    65→  },
+    66→  packages: [{ name: 'One-time', durationMonths: 0, price: 4999 }],
+    67→}
+    68→
+    69→const productListing = {
+    70→  name: 'Product Listing',
+    71→  description:
+    72→    'SEO-optimized marketplace listings: keyword-rich titles, bullet points, A+ content guidance, backend search terms and variant mapping — ready to convert.',
+    73→  pricingModel: 'ONE_TIME',
+    74→  workflowType: 'STANDARD',
+    75→  duration: '5-7 business days',
+    76→  features: JSON.stringify(['SEO titles & bullets', 'Backend search keywords', 'Image compliance check', 'Variant mapping']),
+    77→  icon: 'package',
+    78→  formConfig: {
+    79→    fields: [
+    80→      { id: 'platform', type: 'select', label: 'Platform for listings', required: true, options: ['Amazon', 'Flipkart', 'Meesho', 'JioMart', 'Multiple platforms'] },
+    81→      { id: 'listing_type', type: 'radio', label: 'Do you need fresh listings or optimization of existing ones?', required: true, options: ['Fresh listings', 'Optimize existing listings'] },
+    82→      { id: 'product_count', type: 'number', label: 'How many products (SKUs)?', required: true },
+    83→      { id: 'category', type: 'text', label: 'Main product category / niche', required: true },
+    84→      { id: 'content_source', type: 'select', label: 'Who prepares the content?', required: true, options: ['I will provide product details', 'Prepare from my catalog file', 'Need help sourcing content'] },
+    85→      { id: 'catalog_file', type: 'file', label: 'Attach catalog / product sheet (optional)', required: false },
+    86→    ],
+    87→  },
+    88→  docRequirements: {
+    89→    documents: [
+    90→      { id: 'product_images', label: 'Product images', category: 'PRODUCT', mandatory: true, description: 'White background, minimum 1000×1000 px' },
+    91→      { id: 'product_details', label: 'Product details sheet', category: 'PRODUCT', mandatory: true, description: 'Titles, key features, specifications, MRP & selling price' },
+    92→      { id: 'gst_certificate', label: 'GST certificate', category: 'GST', mandatory: false },
+    93→      { id: 'brand_auth', label: 'Brand authorization letter', category: 'BRAND', mandatory: false },
+    94→    ],
+    95→  },
+    96→  packages: [
+    97→    { name: 'Up to 25 SKUs', durationMonths: 0, price: 4999 },
+    98→    { name: 'Up to 100 SKUs', durationMonths: 0, price: 9999 },
+    99→    { name: 'Up to 250 SKUs', durationMonths: 0, price: 17999 },
+   100→  ],
+   101→}
+   102→
+   103→const accountManagement = {
+   104→  name: 'Account Management',
+   105→  description:
+   106→    'A dedicated account manager runs your store day-to-day: orders, returns, claims, ads and performance — with monthly health reporting. Hand over access securely through the encrypted vault.',
+   107→  pricingModel: 'SUBSCRIPTION',
+   108→  workflowType: 'ACCOUNT_MANAGEMENT',
+   109→  duration: 'Ongoing · auto-renewing cycle',
+   110→  features: JSON.stringify(['Dedicated account manager', 'Case & claim management', 'Performance monitoring', 'Monthly health report']),
+   111→  icon: 'settings',
+   112→  formConfig: {
+   113→    fields: [
+   114→      { id: 'platforms', type: 'multiselect', label: 'Which platforms should we manage?', required: true, options: ['Amazon', 'Flipkart', 'Meesho', 'JioMart', 'Other'] },
+   115→      { id: 'access_method', type: 'radio', label: 'How will you provide account access?', required: true, options: ['I will create a delegated sub-user account', 'I will share login credentials via the secure vault'] },
+   116→      { id: 'order_volume', type: 'select', label: 'Average monthly orders', required: true, options: ['Under 100', '100 – 500', '500 – 2,000', '2,000+'] },
+   117→      { id: 'focus_areas', type: 'multiselect', label: 'Key focus areas (optional)', required: false, options: ['Orders & returns', 'Claims & cases', 'Ads & promotions', 'Catalog health', 'Reports & analytics'] },
+   118→    ],
+   119→  },
+   120→  docRequirements: { documents: [] }, // access is collected via the encrypted credential vault instead
+   121→  packages: [
+   122→    { name: 'Monthly', durationMonths: 1, price: 4999 },
+   123→    { name: 'Quarterly', durationMonths: 3, price: 13499 },
+   124→    { name: 'Half-Yearly', durationMonths: 6, price: 24999 },
+   125→    { name: 'Annual', durationMonths: 12, price: 44999 },
+   126→  ],
+   127→}
+   128→
+   129→// ---------------------------------------------------------------- seed
+   130→
+   131→async function main() {
+   132→  console.log('Seeding SellerSetu (dynamic services)…')
+   133→
+   134→  const adminHash = await bcrypt.hash('Admin@123', 12)
+   135→  const teamHash = await bcrypt.hash('Team@123', 12)
+   136→  const customerHash = await bcrypt.hash('Customer@123', 12)
+   137→
+   138→  // --- Users ---
+   139→  const admin = await db.user.upsert({
+   140→    where: { email: 'admin@sellersetu.in' },
+   141→    update: {},
+   142→    create: {
+   143→      email: 'admin@sellersetu.in', name: 'Arun Kapoor', phone: '9800000001',
+   144→      passwordHash: adminHash, role: 'ADMIN', company: 'SellerSetu',
+   145→    },
+   146→  })
+   147→  const meera = await db.user.upsert({
+   148→    where: { email: 'meera@sellersetu.in' },
+   149→    update: {},
+   150→    create: {
+   151→      email: 'meera@sellersetu.in', name: 'Meera Iyer', phone: '9800000002',
+   152→      passwordHash: teamHash, role: 'TEAM', company: 'SellerSetu',
+   153→    },
+   154→  })
+   155→  const rahul = await db.user.upsert({
+   156→    where: { email: 'rahul@example.com' },
+   157→    update: {},
+   158→    create: {
+   159→      email: 'rahul@example.com', name: 'Rahul Sharma', phone: '9812345678',
+   160→      company: 'Sharma Essentials', passwordHash: customerHash, role: 'CUSTOMER',
+   161→    },
+   162→  })
+   163→  console.log('users ✓')
+   164→
+   165→  // --- Services (admin-managed catalogue) ---
+   166→  for (const [i, cfg] of [accountCreation, productListing, accountManagement].entries()) {
+   167→    const existing = await db.service.findFirst({ where: { name: cfg.name } })
+   168→    if (!existing) {
+   169→      await db.service.create({
+   170→        data: {
+   171→          name: cfg.name,
+   172→          slug: cfg.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+   173→          description: cfg.description,
+   174→          pricingModel: cfg.pricingModel,
+   175→          workflowType: cfg.workflowType,
+   176→          duration: cfg.duration,
+   177→          features: cfg.features,
+   178→          formConfig: JSON.stringify(cfg.formConfig),
+   179→          docRequirements: JSON.stringify(cfg.docRequirements),
+   180→          icon: cfg.icon,
+   181→          active: true,
+   182→          sortOrder: i,
+   183→          packages: { create: cfg.packages.map((p, j) => ({ ...p, sortOrder: j })) },
+   184→        },
+   185→      })
+   186→    }
+   187→  }
+   188→  console.log('services ✓')
+   189→
+   190→  const svcAccount = await db.service.findFirst({ where: { name: 'Account Creation' }, include: { packages: true } })
+   191→  const svcListing = await db.service.findFirst({ where: { name: 'Product Listing' }, include: { packages: true } })
+   192→  const svcMgmt = await db.service.findFirst({ where: { name: 'Account Management' }, include: { packages: true } })
+   193→  if (!svcAccount || !svcListing || !svcMgmt) throw new Error('services missing')
+   194→
+   195→  // =====================================================================
+   196→  // Demo request 1 — Account Creation (fresh) + Account Management (Monthly)
+   197→  // =====================================================================
+   198→  const existingReq1 = await db.serviceRequest.findFirst({ where: { requestCode: 'SR-2026-00001' } })
+   199→  if (!existingReq1) {
+   200→    const accPkg = svcAccount.packages[0]
+   201→    const mgmtPkg = svcMgmt.packages.find((p) => p.name === 'Monthly')!
+   202→    const totalFee = accPkg.price + mgmtPkg.price
+   203→
+   204→    const req1 = await db.serviceRequest.create({
+   205→      data: {
+   206→        requestCode: 'SR-2026-00001',
+   207→        customerId: rahul.id,
+   208→        status: 'IN_PROGRESS',
+   209→        progress: 60,
+   210→        totalFee,
+   211→        advanceAmount: Math.round(totalFee * 0.5),
+   212→        finalAmount: totalFee - Math.round(totalFee * 0.5),
+   213→        businessName: 'Sharma Essentials',
+   214→        businessPhone: rahul.phone,
+   215→        businessEmail: rahul.email,
+   216→        businessAddress: 'Jaipur, Rajasthan',
+   217→        gstin: '08ABCDE1234F1Z5',
+   218→        brandName: 'SharmaEssentials',
+   219→        requirements: 'Register our home & kitchen brand on Amazon India and set up ongoing management. We already have a trademark.',
+   220→        adminNotes: 'Brand registry case raised with Amazon (Case #34-8821). Account management onboarding starts after registration completes.',
+   221→        pendingAction: 'Please confirm the brand verification email from Amazon Brand Registry Support.',
+   222→        assignedToId: meera.id,
+   223→        services: {
+   224→          create: [
+   225→            {
+   226→              serviceId: svcAccount.id,
+   227→              packageId: accPkg.id,
+   228→              price: accPkg.price,
+   229→              formResponses: JSON.stringify({
+   230→                platform: 'Amazon',
+   231→                registration_type: FRESH,
+   232→                has_gstin: 'Yes',
+   233→                brand_name: 'SharmaEssentials',
+   234→                trademark: 'Yes, registered',
+   235→              }),
+   236→            },
+   237→            {
+   238→              serviceId: svcMgmt.id,
+   239→              packageId: mgmtPkg.id,
+   240→              price: mgmtPkg.price,
+   241→              formResponses: JSON.stringify({
+   242→                platforms: ['Amazon'],
+   243→                access_method: 'I will create a delegated sub-user account',
+   244→                order_volume: '100 – 500',
+   245→                focus_areas: ['Orders & returns', 'Catalog health'],
+   246→              }),
+   247→            },
+   248→          ],
+   249→        },
+   250→      },
+   251→    })
+   252→
+   253→    // Checklist rows generated from the Account Creation config (fresh registration → all except continuing-only doc)
+   254→    const reqRows = svcAccount.docRequirements
+   255→      ? (JSON.parse(svcAccount.docRequirements).documents as { id: string; label: string; category: string; mandatory: boolean; description?: string; showIf?: { fieldId: string; values: string[] } }[])
+   256→          .filter((d) => !d.showIf)
+   257→          .map((d) => ({
+   258→            requestId: req1.id,
+   259→            serviceId: svcAccount.id,
+   260→            requirementId: d.id,
+   261→            label: d.label,
+   262→            category: d.category,
+   263→            mandatory: d.mandatory,
+   264→            description: d.description || null,
+   265→          }))
+   266→      : []
+   267→    await db.requestRequirement.createMany({ data: reqRows })
+   268→    const savedRows1 = await db.requestRequirement.findMany({ where: { requestId: req1.id } })
+   269→    const reqRowMap = new Map(savedRows1.map((r) => [r.requirementId, r]))
+   270→
+   271→    await db.requestStatusHistory.createMany({
+   272→      data: [
+   273→        { requestId: req1.id, status: 'REQUEST_SUBMITTED', progress: 5, note: 'Request submitted for Account Creation, Account Management', createdById: rahul.id },
+   274→        { requestId: req1.id, status: 'AWAITING_ADVANCE_PAYMENT', progress: 10, note: 'Fee confirmed — awaiting 50% advance payment', createdById: admin.id },
+   275→        { requestId: req1.id, status: 'ADVANCE_PAYMENT_RECEIVED', progress: 20, note: 'Advance payment of ₹4,999 received (UPI, TXNDEMO123456). Service process started.', createdById: rahul.id },
+   276→        { requestId: req1.id, status: 'DOCUMENTS_UNDER_REVIEW', progress: 35, note: 'PAN and Aadhaar received and verified.', createdById: meera.id },
+   277→        { requestId: req1.id, status: 'PROCESSING_STARTED', progress: 45, note: 'Amazon seller account creation started.', createdById: meera.id },
+   278→        { requestId: req1.id, status: 'IN_PROGRESS', progress: 60, note: 'Brand registry case raised with Amazon.', createdById: admin.id },
+   279→      ],
+   280→    })
+   281→
+   282→    await db.payment.create({
+   283→      data: {
+   284→        requestId: req1.id, type: 'ADVANCE', amount: Math.round(totalFee * 0.5), status: 'PAID',
+   285→        method: 'UPI', transactionId: 'TXNDEMO123456', receiptNo: 'SR-2026-RCPT-A1042',
+   286→        paidAt: new Date(Date.now() - 4 * 24 * 3600 * 1000),
+   287→      },
+   288→    })
+   289→
+   290→    // Demo documents on disk, linked to checklist rows
+   291→    await mkdir(UPLOAD_DIR, { recursive: true })
+   292→    await writeFile(path.join(UPLOAD_DIR, 'demo-pan.txt'), 'Demo PAN document for Rahul Sharma — AAAPS1234F')
+   293→    await writeFile(path.join(UPLOAD_DIR, 'demo-aadhaar.txt'), 'Demo Aadhaar document (masked)')
+   294→    await writeFile(path.join(UPLOAD_DIR, 'demo-bank.txt'), 'Demo cancelled cheque — HDFC ****8842')
+   295→    await writeFile(path.join(UPLOAD_DIR, 'demo-brand-response.txt'), 'Brand Registry team response: verification email sent to registered address.')
+   296→
+   297→    const panRow = reqRowMap.get('pan_card')
+   298→    const aadhaarRow = reqRowMap.get('aadhaar_card')
+   299→    const bankRow = reqRowMap.get('bank_proof')
+   300→
+   301→    await db.document.createMany({
+   302→      data: [
+   303→        { requestId: req1.id, name: 'PAN Card — Rahul Sharma.pdf', fileName: 'demo-pan.txt', mimeType: 'application/pdf', size: 48, category: 'PAN', status: 'APPROVED', requirementId: panRow?.id, uploadedById: rahul.id, reviewNote: 'Matches application.' },
+   304→        { requestId: req1.id, name: 'Aadhaar Card — Rahul Sharma.pdf', fileName: 'demo-aadhaar.txt', mimeType: 'application/pdf', size: 44, category: 'AADHAAR', status: 'APPROVED', requirementId: aadhaarRow?.id, uploadedById: rahul.id },
+   305→        { requestId: req1.id, name: 'Cancelled cheque.pdf', fileName: 'demo-bank.txt', mimeType: 'application/pdf', size: 42, category: 'BANK', status: 'SUBMITTED', requirementId: bankRow?.id, uploadedById: rahul.id },
+   306→        { requestId: req1.id, name: 'Brand Registry Response.txt', fileName: 'demo-brand-response.txt', mimeType: 'text/plain', size: 96, category: 'SHARED', status: 'SHARED', uploadedById: meera.id },
+   307→      ],
+   308→    })
+   309→    if (bankRow) await db.requestRequirement.update({ where: { id: bankRow.id }, data: { status: 'UPLOADED' } })
+   310→
+   311→    await db.pendingTask.createMany({
+   312→      data: [
+   313→        { requestId: req1.id, title: 'Pay 50% advance payment to start the service', owner: 'CUSTOMER', isDone: true },
+   314→        { requestId: req1.id, title: 'Upload the mandatory documents from your checklist', owner: 'CUSTOMER', isDone: true },
+   315→        { requestId: req1.id, title: 'Provide secure account access via the credential vault', owner: 'CUSTOMER', detail: 'A delegated sub-user account is preferred. Use the encrypted vault — never chat.' },
+   316→        { requestId: req1.id, title: 'Confirm brand verification email from Amazon', owner: 'CUSTOMER' },
+   317→        { requestId: req1.id, title: 'Await Amazon brand registry approval', owner: 'TEAM' },
+   318→      ],
+   319→    })
+   320→
+   321→    await db.message.createMany({
+   322→      data: [
+   323→        { requestId: req1.id, senderId: rahul.id, content: 'Hi team, I have submitted the request. What documents do you need from me?', isRead: true },
+   324→        { requestId: req1.id, senderId: meera.id, content: 'Welcome Rahul! Your checklist is in the Documents tab — PAN, Aadhaar and a cancelled cheque are required. Everything else is optional.', isRead: true },
+   325→        { requestId: req1.id, senderId: meera.id, content: 'Internal: eligibility for delegated access confirmed — customer will create a sub-user after registration. Hold vault onboarding until then.', isInternal: true, isRead: true },
+   326→        { requestId: req1.id, senderId: meera.id, content: 'Your seller account is created. We have raised the Brand Registry case — please confirm the verification email from Amazon when it arrives.', isRead: false },
+   327→      ],
+   328→    })
+   329→
+   330→    // Encrypted credential demo entry
+   331→    const vault = encryptVault({
+   332→      loginUrl: 'https://sellercentral.amazon.in',
+   333→      username: 'sharmaessentials-ops@sellersetu-demo.in',
+   334→      password: 'DelegatedAccess!2026',
+   335→      mfaNote: 'OTP goes to registered merchant phone — shared live on call.',
+   336→    })
+   337→    await db.credentialShare.create({
+   338→      data: {
+   339→        requestId: req1.id,
+   340→        title: 'Amazon Seller Central — delegated sub-user',
+   341→        hint: 'Sub-user "sellersetu-ops" with Orders + Catalog permissions. Main login stays private.',
+   342→        ...vault,
+   343→        createdById: rahul.id,
+   344→      },
+   345→    })
+   346→
+   347→    await db.notification.create({
+   348→      data: {
+   349→        userId: rahul.id, requestId: req1.id,
+   350→        title: 'Request SR-2026-00001 updated',
+   351→        body: 'Status is now "In Progress" — 60% complete. Note: Brand registry case raised with Amazon.',
+   352→        type: 'STATUS',
+   353→      },
+   354→    })
+   355→
+   356→    await db.activityLog.createMany({
+   357→      data: [
+   358→        { userId: rahul.id, requestId: req1.id, action: 'REQUEST_SUBMITTED', details: 'SR-2026-00001 created for Account Creation + Account Management' },
+   359→        { userId: admin.id, requestId: req1.id, action: 'FEE_UPDATED', details: `SR-2026-00001: total fee set to ₹${totalFee.toL…221277 tokens truncated…le regression suite scripts/qa-lifecycle.ts (63 assertions, `bun scripts/qa-lifecycle.ts`): 5-role logins → public catalog (no-price leak check) → request intake (dynamic form auto-fill, draft→submit, COMING_SOON server-side rejection) → quotation create/send/request-revision/revise-to-v2/accept + locked-record guard → project auto-creation → weighted milestones (0%→50%→80%→100% recalc) + tasks → document request → customer upload → approval → advance payment (50% of accepted total) → UPI payment → receipt no. → staff-issued invoice (amount=payment, gstRatePct 0 — mirrors staff UI, no double-GST) → MANAGED vendor engagement (create→authorize→ACTIVE) → vendor milestone DONE + submit_for_review → internal-notes segregation (customer cannot see isInternal; vendor cannot see managedFeeNote) → RBAC negatives (401/403 matrix) → admin stats/reports/CSV/CMS/settings/audit → notifications for customer+vendor.
+- REAL BUG #1 fixed: project.vendorId was NEVER written anywhere — vendor execution gates (milestones PATCH, submit_for_review, chat visibility fallback) were dead code; vendors could never mark milestones or submit work via API. Fix: sync Project.vendorId on vendor-connection create + authorize (and clear on cancel), plus request.vendorId fallback in the vendor gates.
+- REAL BUG #2 fixed: GET /api/requests/[id] leaked confidential managedFeeNote (managed-model margin notes) to customer/vendor roles. Fix: stripped from vendorConnections for non-staff payloads; vendor chat-visibility fallback added for assigned requests.
+- Verified invoice semantics: invoice amount = net payment amount + optional GST (staff UI defaults gstRatePct 0); QA initially double-taxed by sending GST-inclusive quotation totals — corrected the suite to mirror the UI flow and assert totalAmount == payment.amount; purged 3 bogus ₹16,012.6 test invoices from the demo DB.
+- Browser E2E (agent-browser): vendor portal → Kriya Studio APPROVED → ACTIVE engagement → milestones show Approved/Completed states → Submit work tab renders file sharing (SR-2026-00028, 100% progress bar, QA PAN card listed); customer dashboard lists QA requests with "Managed service Kriya Studio" badges → workspace 8 tabs (Overview/Quotation/Project/Documents/Deliverables/Payments/Chat/Timeline) → Payments tab shows accepted quotation ₹13,570 incl. GST, Paid ₹6,785/Due ₹0, UPI receipt SR-2026-RCPT-A6345, INV-2026-00008 ISSUED; zero console/page errors. Screenshots: scripts/verify-qa-vendor-workspace.png, verify-qa-vendor-submit.png, verify-qa-customer-payments.png.
+- Final result: 63/63 assertions PASS (two transient failures during Next.js hot-reload re-ran clean), lint + tsc clean after fixes.
+
+Stage Summary:
+- Phase 7 (Testing & QA) complete: the platform survives a full cross-role business lifecycle regression with zero failures, two real execution-blocking/security bugs found and fixed, production build green — Phase 8 (deployment) is now unblocked.
+- Re-run QA anytime with: bun scripts/qa-lifecycle.ts (creates fresh QA-lifecycle-* records; safe to repeat).
+- Demo logins unchanged: admin@sellersetu.in/Admin@123 · ops@sellersetu.in/Ops@123 · sales@sellersetu.in/Sales@123 · pm@sellersetu.in/Pm@123 · meera@sellersetu.in/Team@123 · rahul@example.com/Customer@123 · priya@example.com/Customer@123 · studio.kriya@example.com/Vendor@123 · sales.packpro@example.com/Vendor@123 · hello.printbazaar@example.com/Vendor@123 (pending).
+
+---
+Task ID: bugfix-vendor-sync-leak
+Agent: Super Z (main agent)
+Task: "correct these 2 real bugs. Then see what to do next" — harden the Phase-7 QA fixes (vendorId sync + managedFeeNote leak) by closing their residual gaps, then proceed to the next phase.
+
+Work Log:
+- Audited both Phase-7 fixes on disk: core fixes present (vendor-connections create/authorize/cancel sync project.vendorId; requests/[id] GET strips managedFeeNote for non-staff; gates use request.vendorId fallback).
+- Found & fixed residual gap #1 (Bug #1): quotation-accept auto-created the Project WITHOUT vendorId — projects stayed vendor-null when the vendor was connected before acceptance. Fix: project.create now inherits q.request.vendorId; existing project rows get backfilled on acceptance (quotations/[id]/route.ts).
+- Found & fixed residual gap #2 (Bug #2): GET /api/vendor-connections still returned managedFeeNote + notes to VENDOR role (only customers were stripped) — margin notes leaked to the very audience they hide from. Fix: strip both fields for ALL non-staff roles (vendor-connections/route.ts).
+- Found & fixed residual gap #3 (Bug #1 consistency): staff assigning/clearing a vendor via request PATCH (admin workspace VendorSelect) never synced project.vendorId. Fix: db.project.updateMany in the same PATCH (requests/[id]/route.ts, with type-safe cast).
+- QA suite extended 63 → 69 assertions: vendor+customer connection lists hide managedFeeNote/notes; admin clear/re-assign via request PATCH keeps project.vendorId in sync; vendor milestone access works after re-assignment.
+- Verified: eslint clean; tsc clean for project code (only pre-existing skills/ errors remain); bun scripts/qa-lifecycle.ts → 69/69 PASS.
+
+Stage Summary:
+- The 2 real bugs are now fully corrected with all residual paths closed and permanently regression-locked (69 assertions). Vendor execution unblocks in every flow (pre-acceptance connection, post-acceptance connection, request-PATCH assignment); managed-fee/internal notes never leave staff scope on any endpoint.
+
+---
+Task ID: phase-8-deployment
+Agent: Super Z (main agent)
+Task: Phase 8 of the master roadmap — production/deployment readiness hardening, build & smoke verification.
+
+Work Log:
+- NEW /api/health (public, unauthenticated, leak-free): DB ping via SELECT 1, db latency, total latency, status ok/degraded, 503 when DB down, Cache-Control no-store. Serves uptime monitors & container probes.
+- SECURITY HEADERS (next.config.ts headers()): X-Content-Type-Options nosniff, Referrer-Policy strict-origin-when-cross-origin, Permissions-Policy (camera/microphone/geolocation/payment denied), X-DNS-Prefetch-Control on — applied to all routes. (X-Frame-Options deliberately omitted for platform preview-iframe compatibility; sameSite=lax + httpOnly already guard session cookies.)
+- SESSION HARDENING (lib/auth.ts): session cookie `secure` flag now driven by AUTH_COOKIE_SECURE env (set true behind HTTPS); production startup emits a loud [SECURITY] warning when AUTH_SECRET is unset (dev-secret fallback is forgeable).
+- Verification: eslint clean; tsc clean for project code; `bun run build` standalone green (all 40+ routes incl. /api/health).
+- Production smoke test (standalone server on :3100, single session): /api/health → {"status":"ok","database":{"up":true}}; security headers present on /; landing title renders; POST /api/auth?mode=login → SUPER_ADMIN session; authed GET /api/admin/stats → 200 with live stats; cookie HttpOnly flag confirmed; [SECURITY] AUTH_SECRET warning correctly fired under NODE_ENV=production. Port-3000 platform server untouched and healthy after tests.
+- Ops env contract documented in code: AUTH_SECRET (required in prod), AUTH_COOKIE_SECURE=true (HTTPS deployments), DATABASE_URL.
+
+Stage Summary:
+- Phase 8 (deployment readiness) complete: health probe, security headers, session/secret hardening, standalone production build smoke-tested end-to-end. All 8 roadmap stages now complete; platform is deploy-ready — remaining steps are infra-side (provision host/DB, set AUTH_SECRET + AUTH_COOKIE_SECURE, run build + standalone server behind TLS).
+
+---
+Task ID: vendor-portal-completeness
+Agent: Super Z (main agent)
+Task: "I think there is still some work at the vendor ends" — audit and complete the vendor-side execution experience.
+
+Work Log:
+- Gap audit of vendor-portal.tsx + APIs found 5 real gaps: (1) vendors never saw the customer's requirement spec (formResponses existed in API payload, no UI); (2) tasks could only ever be assigned to staff — the vendor-assignee code path was dead code and vendors had no task UI; (3) ProfileEditor wiped stored contactPerson/phone/gstin on every save (initialized to '' and /api/auth/me whitelisted them out of the payload); (4) vendors had no visibility into status history / revision feedback; (5) vendors couldn't see which uploads became approved customer deliverables.
+- Vendor workspace rebuilt: 6 tabs — Requirements (work spec + expected deliverables/timeline/location + labeled Intake answers rendered from service.formConfig × formResponses via parseFormConfig/isFieldVisible, + customer reference files) | Milestones (unchanged) | My tasks (assigned tasks with TODO/IN_PROGRESS/BLOCKED/DONE status control) | Submit work (+ new "Approved deliverables shared with customer" section) | Chat | Activity (status timeline with notes, progress, actor). Tab strip horizontally scrollable on mobile.
+- Tasks API: connected vendor (request.vendorId or project.vendorId) is now a valid assignee in POST + PATCH; non-connected vendors still rejected 400. Vendor task updates keep existing isVendor gate.
+- Staff side: TaskEditor now uses a TaskAssigneeSelect listing staff + "Vendor — {businessName}" option (from project.vendor/request.vendor); dialog retitled "Add task" with helper copy.
+- ProfileEditor prefill fixed (contactPerson/phone/gstin from profile) AND /api/auth/me now includes those fields in the vendorProfile projection (root cause of the wipe: payload never carried them).
+- QA suite extended 69 → 74: staff assigns task to connected vendor → vendor sees own task in workspace → vendor status updates IN_PROGRESS → DONE; assignment of non-connected vendor rejected.
+- Verified: lint + tsc clean; bun scripts/qa-lifecycle.ts → 74/74 PASS; browser E2E as Kriya Studio (studio.kriya@example.com): workspace shows all 6 tabs, Requirements renders service + intake answers (Website type/Corporate website/Payment gateway etc.), My tasks (1) shows "QA vendor task: deliver assets" with working status combobox, Activity renders status timeline, profile round-trip saves and re-displays contact person/phone; mobile 390px scrollable tabs; zero console/page errors. Screenshots: scripts/verify-vendor-workspace.png, verify-vendor-mobile2.png.
+
+Stage Summary:
+- The vendor end is now execution-complete: vendors receive the full requirement spec (dynamic intake answers), can be assigned and update tasks, see approved deliverables and the request activity timeline, and their profile edits persist correctly. Staff can drive vendor execution through task assignment with notifications.
+
+---
+Task ID: services-detail-and-logos
+Agent: Super Z (main agent)
+Task: "add more information to all the services in detail and also use real logo for some company based details" — enrich the entire 150-service catalog with per-service detail content and add real company logos across vendor/company surfaces.
+
+Work Log:
+- Schema (SQLite, prisma db push): Service.process (JSON [{t,d}]), ServiceCategory.faqs (JSON [{q,a}]), VendorProfile.logoUrl, Testimonial.logoUrl.
+- NEW scripts/seed-catalog.ts: the 16-category A–P catalog extracted from seed.ts into a shared module (single source of truth for seed + coverage check).
+- NEW scripts/service-details/ (types.ts, cat-a-b/c-d/e-f/g-h/i-j/k-l/m-n/o-p.ts, faqs.ts, index.ts, check.ts): UNIQUE detailed content for ALL 150 services — 2-3 sentence service-specific description, 5 scope items, 5 deliverables, 4-step "How we deliver" process — plus 16 category-level FAQ sets (4 each, 64 FAQs). check.ts validates name coverage (150/150, no orphans, no stray CJK paste accidents — caught & fixed 2).
+- Logos generated via image-generation skill (flat vector-style marks, no text to avoid AI-garbled lettering; first SellerSetu attempt produced "SelerSetu" text → regenerated symbol-only): public/logos/sellersetu-mark.png (bridge = "Setu" motif) + companies/{kriya-studio, packpro-industries, printbazaar, verma-interiors, nature-basket-foods, urban-nest-interiors, sheikh-traders, craftly-brands}.png (9 total, visually verified each).
+- seed.ts: consumes SERVICE_DETAILS (per-service description/scope/deliverables/process with category fallbacks), CATEGORY_FAQS into categories, vendor logoUrls (Kriya/PackPro/PrintBazaar) and testimonial logoUrls; reseeded successfully.
+- APIs: /api/catalog returns service.process + category.faqs; services POST/PATCH accept process; /api/admin/vendors/[id] PATCH now has company-details mode (logoUrl, website, description, expertise, serviceLocations, rating 0-5 validated, completedProjects) alongside status mode; /api/vendors PATCH accepts logoUrl (vendor self-service); /api/auth/me vendorProfile projection + all request vendor projections include logoUrl.
+- UI: public ServiceDetail gained "How we deliver" numbered process timeline + "Common questions" category-FAQ accordion (service cards now show 3-line description + category); landing header/footer/testimonial cards use real logos (CompanyLogo component in shared.tsx with initials fallback); admin sidebar + vendor portal header + favicon use the SellerSetu mark; admin ServiceEditor gained ProcessEditor (ordered title+detail steps); CategoryEditor rebuilt into a full category manager (edit name/icon/description/FAQs via categories PATCH + add-category section); VendorsTab shows logos + "Edit details" dialog (company-details round-trip verified via API: PrintBazaar website persisted); VendorSelect + TaskAssigneeSelect show vendor logos; customer dashboard vendor badges ("Executing partner", "Executed by") show mini logos.
+- Verification: tsc clean; eslint clean (0 errors/warnings); catalog API verified (16/16 categories with faqs, 150/150 services with process + detailed descriptions); bun scripts/qa-lifecycle.ts → 74/74 PASS; bun run build (standalone) green; dev server restarted (Prisma client reload) and healthy; browser E2E (agent-browser): landing logo ✓, service detail process+FAQs ✓, testimonial logos ✓, admin vendors logos+edit ✓, category FAQ manager ✓, service process editor prefilled ✓, vendor portal logo (Kriya Studio aperture mark) ✓, mobile 390px ✓ — zero console/page errors. Screenshots: scripts/verify-svc-01..11-*.png.
+
+Stage Summary:
+- Every one of the 150 services now has unique, detailed, quotation-ready public content (description, scope, deliverables, 4-step delivery process) and every category carries its own FAQ set — all still 100% admin-editable (service editor gained a delivery-process editor; categories dialog now manages descriptions, icons and FAQs).
+- Company-based details are real-logo-driven end-to-end: platform mark (bridge motif) in landing/admin/vendor-portal headers + favicon, vendor company logos on admin vendor cards, vendor dropdowns, task assignee, customer request badges and the vendor portal itself, and testimonial company logos on the landing page. Admins can update any vendor's logo/profile via Edit details; vendors can set their own logo URL.
+- No public pricing introduced anywhere; managedFeeNote/vendor notes remain staff-only; no SP-API reintroduced.
+
+---
+Task ID: final-cleanup-and-deploy-package
+Agent: Super Z (main agent)
+Task: "ok, move to next step" — after the services-details+logos task, verify project health and take the next logical step: deployment packaging (README, .env.example) + final verification. Discovered the previously-ordered Amazon/marketplace removal had AGAIN left orphaned source files on disk that broke `tsc` and the production build; removed them for real and re-verified everything.
+
+Work Log:
+- Health check: dev server healthy (/api/health 200, DB up).
+- Created .env.example: DATABASE_URL (sqlite, portable to Postgres), AUTH_SECRET (required in prod), AUTH_COOKIE_SECURE, NODE_ENV — with generation guidance (openssl rand -base64 48).
+- Created root README.md: overview + business rules (quotation-only pricing, locked quotations, staff-only managedFeeNote, admin-configurable catalog), roles table, 3 execution models, tech stack, setup steps, full demo-credentials table, scripts table, deployment notes (standalone build, /api/health probe, security headers, uploads outside public/, Postgres porting), project structure, quality gates. Documents the no-SP-API stance explicitly.
+- VERIFICATION DISCOVERY: `npx tsc --noEmit` was FAILING (2 errors) — an earlier "clean" reading was an artifact of piping through tail (exit code came from tail, not tsc). Root cause: the user-ordered Amazon SP-API removal (task amazon-removal, later re-done in universal-platform) had left orphaned files on disk a THIRD time: src/lib/marketplace/ (sp-api client, demo, scheduler, ops-bridge…), src/app/api/marketplace/*, src/app/api/admin/integrations/amazon/*, src/components/amazon/*, amazon-orders.tsx, admin-integrations.tsx, src/instrumentation.ts, scripts/fix-conn.ts, scripts/purge-demo-data.ts — all importing the long-removed Prisma models (MarketplaceConnection etc.), plus a stale v1 route src/app/api/requests/[id]/requirements/[reqId]/route.ts referencing the removed requestRequirement model, plus the obsolete service-editor.tsx (reported deleted in universal-platform but still on disk). Production build failed with "The export canOwnConnection was not found".
+- CLEANUP: verified via rg that nothing in live code imports any of these orphans (scan hits in admin-modules/landing/tasks/ai-assistant were false positives: business copy "service marketplace" and the substring 'lwa' inside "always"). Deleted: src/lib/marketplace, src/app/api/marketplace, src/app/api/admin/integrations, src/components/amazon, src/components/amazon-orders.tsx, src/components/admin-integrations.tsx, src/components/service-editor.tsx, src/instrumentation.ts, scripts/fix-conn.ts, scripts/purge-demo-data.ts, src/app/api/requests/[id]/requirements/, removed unused ApiRequestRequirement-era type (left client.ts intact), cleared stale .next cache.
+- REBUILD + VERIFY: `npx tsc --noEmit` → 0 errors in src/ + scripts/ (remaining hits only in skills/ tooling, not app code); `npx eslint .` → exit 0; `npm run build` → exit 0, route manifest contains 0 marketplace/integrations routes; dev server restarted and healthy; /api/marketplace/connections → 404; bun scripts/qa-lifecycle.ts → 74/74 PASS; standalone production boot on :3100 → health OK (DB up, 5ms), security headers present (nosniff, Referrer-Policy, Permissions-Policy), admin login 200.
+
+Stage Summary:
+- The Amazon SP-API integration is now provably, permanently removed: source orphans deleted (third attempt finally persisted), build/tsc/lint all genuinely green, marketplace routes 404, schema has no marketplace models, QA 74/74.
+- Project now ships a real deployment package: README.md (setup, credentials, architecture, deployment) + .env.example.
+- Final quality gates: tsc clean (src+scripts), eslint 0/0, QA 74/74, standalone production smoke (health/headers/login) PASS.
+
+---
+Task ID: vendor-profile-and-payouts
+Agent: Super Z (main agent)
+Task: "Give some profile and company managing option in vendor side also. how they recieve the payments and project initiates." — vendor-side company/profile management, a payouts view explaining how vendors get paid, and transparency on how projects start.
+
+Work Log:
+- Schema (db push + generate): VendorProfile += address, city, state, payoutMode (BANK|UPI|""), payoutAccountName, payoutAccountNumber, payoutIfsc, payoutUpiId; Milestone += vendorPayoutAmount (nullable), payoutStatus (PENDING|RELEASED), payoutReleasedAt, payoutNote (payment ref e.g. NEFT UTR).
+- APIs: /api/vendors PATCH accepts the new business+payout fields with validation (mode whitelist, a/c 6-20 digits, IFSC ^[A-Z]{4}0[A-Z0-9]{6}$, UPI name@bank); /api/auth/me owner projection includes payout+address+approvedAt; /api/admin/vendors/[id] company-details mode manages the same fields (staff-side corrections); milestones POST accepts vendorPayoutAmount, PATCH (canManageProjects only) sets payout amount/note and RELEASED/PENDING with vendor notification on release and revert (payout-mode aware copy); /api/requests/[id] GET now projects milestones by role — vendor on managed execution sees their payout fields but client billing `amount` is stripped, vendor on DIRECT_CONNECTION keeps amount (they bill the customer), customers have all vendor-payout fields stripped.
+- Vendor portal UI: new "Payments" tab — "How you get paid" explainer (managed: platform pays per verified milestone; direct: collect from customer, connection fee separate), masked payout-destination line, per-engagement payout cards with milestone rows (amount/status/released date/ref) and totals (Total/Released/Pending, TBC counting); Engagements tab gained a 4-step "How projects reach you" strip + per-status what-happens-next hints (ENGAGEMENT_HINTS); workspace milestone rows show payout chips (₹ + Released date / Awaiting release / TBC; direct: "Your billing ₹X — collect directly"); Profile tab rebuilt into three sections: Company profile card (logo, verified badge, contact, expertise/location chips, rating, projects, "Partner since"), Business details editor (incl. GSTIN, registered address, city, state), Payout details editor (mode switcher BANK/UPI with conditional fields) + privacy note.
+- Staff/admin UI: MilestoneEditor gained optional vendor-payout amount field; new PayoutEditor dialog (set amount + payment ref, Release payout, Revert to pending — vendor auto-notified); milestone rows show payout badges ("Payout ₹X · released") and a Payout button; admin VendorDetailsEditor gained contact/GSTIN/address/city/state + staff-only payout channel section.
+- Seed: Kriya Studio (Bengaluru, UPI payout), PackPro (Ahmedabad, HDFC bank payout) and PrintBazaar (Jaipur, pending, no payout) fully populated; PackPro managed-project milestones carry payouts — two RELEASED with NEFT refs + matching vendor notification, two pending; realistic "Partner since" dates.
+- QA extended 74 → 86: invalid IFSC rejected, vendor payout+address save, /api/auth/me round-trip, vendor cannot set milestone payouts (403), staff set + release payout, vendor sees own payout while client billing stripped (managed), customer view strips payout fields, payout-release notification, admin payout/company edit persists. 86/86 PASS.
+- Verification: tsc clean (src), eslint 0/0; browser E2E (agent-browser): vendor Payments tab (explainer + totals ₹3,57,000/₹1,20,000/₹2,37,000 + masked a/c + released rows with refs), profile round-trip (UPI switch → save → reload → persisted → reverted to BANK), milestone payout chips on all 4 milestones, admin vendor editor payout section, PayoutEditor release + revert with live badge updates, mobile 390px — found + fixed a TabsList horizontal overflow (wrapped in overflow-x-auto container, re-verified scrollWidth OK), zero console/page errors. Screenshots: scripts/verify-vp-01..07-*.png.
+
+Stage Summary:
+- Vendors now fully manage their company: profile card preview, business details (GSTIN/address/city/state), and payout channel (bank/UPI) — mirrored staff-side in the admin vendor editor.
+- Vendor payments are transparent end-to-end: milestone payouts (amount, release status, payment reference, released date) with role-safe projections (vendor never sees client billing on managed work; customers never see vendor payouts), release/revert notifications, and a "how you get paid" explainer per execution model.
+- Project initiation is explained in-product: approval → matching → quotation acceptance → workspace, plus per-engagement status hints.
+- No public pricing introduced; managedFeeNote/vendor notes remain staff-only; no SP-API anywhere. README + QA counts updated (86).
