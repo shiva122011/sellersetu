@@ -123,7 +123,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('error', (err) => console.error(`socket error (${socket.id}):`, err))
 })
 
-const PORT = 3003
+const PORT = Number(process.env.PORT) || 3003
 httpServer.listen(PORT, () => console.log(`Chat service running on port ${PORT}`))
 
 process.on('SIGTERM', () => {
