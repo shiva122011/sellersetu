@@ -1,3 +1,5 @@
+const { spawnSync } = require('node:child_process')
+
 const required = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']
 const missing = required.filter((name) => !process.env[name])
 
@@ -13,6 +15,13 @@ if (!process.env.DATABASE_URL && missing.length === 0) {
 if (!process.env.DATABASE_URL) {
   throw new Error(`DATABASE_URL is missing, and GoDaddy DB variables are incomplete: ${missing.join(', ')}`)
 }
+
+const prismaCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+const migration = spawnSync(prismaCommand, ['prisma', 'db', 'push', '--accept-data-loss'], {
+  stdio: 'inherit',
+  env: process.env,
+})
+if (migration.status !== 0) process.exit(migration.status || 1)
 
 process.env.NODE_ENV = 'production'
 require('../.next/standalone/server.js')
