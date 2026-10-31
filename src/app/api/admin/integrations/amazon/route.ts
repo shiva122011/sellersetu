@@ -113,29 +113,12 @@ export async function PUT(req: NextRequest) {
   return ok({
     config: {
       clientId: cfg.clientId || '',
-      clientSecretMasked: maskSecret(cfg.clientSecre…6137 tokens truncated…tus', 400)
-
-    const data: Record<string, unknown> = {
-      status,
-      reviewNote: body.reviewNote !== undefined ? String(body.reviewNote || '') : profile.reviewNote,
-    }
-    if (status === 'APPROVED') {
-      data.approvedById = admin.id
-      data.approvedAt = new Date()
-    }
-    const updated = await db.vendorProfile.update({ where: { id }, data, include: { user: { select: { id: true, name: true, email: true } } } })
-
-    const messages: Record<string, string> = {
-      APPROVED: 'Your vendor account is approved. You can now receive project assignments and direct-connection requests.',
-      REJECTED: `Your vendor application was not approved.${body.reviewNote ? ' Note: ' + String(body.reviewNote) : ''}`,
-      SUSPENDED: `Your vendor account has been suspended.${body.reviewNote ? ' Note: ' + String(body.reviewNote) : ''}`,
-      PENDING: 'Your vendor account was moved back to review.',
-    }
-    await notifyUser(profile.userId, 'Vendor account update', messages[status] || 'Your vendor status changed.', null, 'VENDOR')
-    await logActivity('VENDOR_STATUS_CHANGED', `Vendor "${profile.businessName}" → ${status}`, admin.id, null)
-    return ok({ vendor: updated })
-  } catch (e) {
-    console.error('vendor update failed', e)
-    return fail('Failed to update vendor', 500)
-  }
+      clientSecretMasked: maskSecret(cfg.clientSecret),
+      hasSecret: Boolean(cfg.clientSecret),
+      region: cfg.region,
+      configured: cfg.configured,
+      sandboxMode: sandboxNow,
+    },
+    opsSettings: { autoSyncIntervalMinutes: autoSyncIntervalMinutes2, lowStockThreshold: lowStockThreshold2 },
+  })
 }

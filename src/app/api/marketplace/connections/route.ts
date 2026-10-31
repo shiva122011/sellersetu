@@ -103,97 +103,98 @@ export async function GET() {
 //   flow=oauth (default): returns the official Amazon authorization URL; the
 //     browser redirects to Amazon for consent, then back to /api/marketplace/callback.
 //   flow=refresh_token: self-authorization — the seller pastes the refresh
-//     token generated in th…19844 tokens truncated…TATION', progress: SUGGESTED_PROGRESS.QUOTATION_PREPARATION ?? 20 } })
-      await logActivity('QUOTATION_REVISED', `${q.quotationNo} → revision v${newVersion} (${updated.quotationNo})`, user.id, q.requestId)
-      return ok({ quotation: updated })
+//     token generated in their own SP-API developer console. The token is
+//     validated against LWA immediately, so only real authorizations connect.
+export async function POST(req: NextRequest) {
+  const user = await getSessionUser()
+  if (!user) return fail('Unauthorized', 401)
+  if (user.role !== 'CUSTOMER') return fail('Only customers can connect marketplace accounts', 403)
+
+  const body = await req.json().catch(() => ({}))
+  const marketplace = body.marketplace || 'amazon'
+  if (marketplace !== 'amazon') {
+    return fail('Only Amazon is available in Phase 1. Flipkart and Meesho are coming in a later phase.', 400)
+  }
+
+  const configured = await amazonLiveConfigured()
+  if (!configured) {
+    return fail(
+      'The Amazon Selling Partner API app is not configured yet. The platform administrator must add the LWA app credentials under Admin → Integrations before accounts can be authorized.',
+      400
+    )
+  }
+
+  const existing = await db.marketplaceConnection.findUnique({
+    where: { customerId_marketplace: { customerId: user.id, marketplace } },
+  })
+  if (existing && existing.status === 'CONNECTED') {
+    return fail('Your Amazon account is already connected.', 409)
+  }
+
+  const flow = body.flow === 'refresh_token' ? 'refresh_token' : 'oauth'
+  const provider = getProvider('amazon')
+
+  if (flow === 'oauth') {
+    const redirectUri = `${req.nextUrl.origin}/api/marketplace/callback`
+    const state = await signOAuthState(user.id)
+    try {
+      const url = await provider.authorizeUrl({ customerId: user.id, redirectUri, state })
+      return ok({ flow: 'oauth', authorizeUrl: url })
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : 'Could not start Amazon authorization', 500)
     }
+  }
 
-    // ---------- CUSTOMER actions ----------
-    if (user.role === 'CUSTOMER') {
-      if (q.request.customerId !== user.id) return fail('Access denied', 403)
+  // flow=refresh_token (self-authorization)
+  const refreshToken = typeof body.refreshToken === 'string' ? body.refreshToken.trim() : ''
+  const sellerIdInput = typeof body.sellerId === 'string' ? body.sellerId.trim() : ''
+  if (!refreshToken) return fail('Paste the refresh token generated in your SP-API developer console.', 400)
 
-      if (action === 'accept') {
-        if (!['SENT', 'NEGOTIATION', 'REVISION_REQUESTED'].includes(q.status)) {
-          return fail('This quotation is not open for acceptance', 400)
-        }
-        const quotation = await db.quotation.update({
-          where: { id }, data: { status: 'ACCEPTED', lockedAt: new Date(), acceptedAt: new Date() },
-          include: { items: { orderBy: { sortOrder: 'asc' } } },
-        })
-        await db.quotation.updateMany({
-          where: { requestId: q.requestId, id: { not: id }, status: { in: ['SENT', 'NEGOTIATION', 'REVISION_REQUESTED', 'DRAFT'] } },
-          data: { status: 'SUPERSEDED' },
-        })
-        // Project workspace is created on acceptance (inherits the vendor if one was connected pre-acceptance)
-        const existingProject = await db.project.findUnique({ where: { requestId: q.requestId } })
-        if (!existingProject) {
-          await db.project.create({
-            data: { requestId: q.requestId, status: 'PLANNING', executionModel: q.request.executionModel, vendorId: q.request.vendorId },
-          })
-        } else if (q.request.vendorId && !existingProject.vendorId) {
-          await db.project.update({ where: { id: existingProject.id }, data: { vendorId: q.request.vendorId } })
-        }
-        await db.serviceRequest.update({
-          where: { id: q.requestId },
-          data: { status: 'QUOTATION_ACCEPTED', stage: 'QUOTATION', progress: SUGGESTED_PROGRESS.QUOTATION_ACCEPTED ?? 35, pendingAction: null },
-        })
-        await db.requestStatusHistory.create({
-          data: { requestId: q.requestId, status: 'QUOTATION_ACCEPTED', stage: 'QUOTATION', progress: SUGGESTED_PROGRESS.QUOTATION_ACCEPTED ?? 35, note: `Quotation ${q.quotationNo} accepted (₹${q.total}) — commercial record locked`, createdById: user.id },
-        })
-        await db.pendingTask.createMany({ data: [
-          { requestId: q.requestId, title: 'Plan milestones and schedule payments as per accepted terms', owner: 'TEAM' },
-        ] })
-        await notifyStaff('Quotation accepted', `${q.request.requestCode}: customer accepted ${q.quotationNo} (₹${q.total}). Project workspace created.`, q.requestId, 'QUOTATION')
-        await logActivity('QUOTATION_ACCEPTED', `${q.request.requestCode}: ${q.quotationNo} accepted (₹${q.total})`, user.id, q.requestId)
-        return ok({ quotation })
-      }
+  try {
+    const creds = await provider.refreshTokens({ refreshToken })
+    const profile = await provider.fetchSellerProfile(creds)
 
-      if (action === 'reject') {
-        if (!['SENT', 'NEGOTIATION', 'REVISION_REQUESTED'].includes(q.status)) {
-          return fail('This quotation is not open for response', 400)
-        }
-        const quotation = await db.quotation.update({
-          where: { id }, data: { status: 'REJECTED', customerNote: body.note ? String(body.note).slice(0, 1000) : null },
-        })
-        await db.serviceRequest.update({
-          where: { id: q.requestId },
-          data: { status: 'QUOTATION_REJECTED', stage: 'QUOTATION', progress: SUGGESTED_PROGRESS.QUOTATION_REJECTED ?? 0 },
-        })
-        await db.requestStatusHistory.create({
-          data: { requestId: q.requestId, status: 'QUOTATION_REJECTED', stage: 'QUOTATION', progress: 0, note: `Quotation ${q.quotationNo} rejected${body.note ? ': ' + String(body.note).slice(0, 200) : ''}`, createdById: user.id },
-        })
-        await notifyStaff('Quotation rejected', `${q.request.requestCode}: customer rejected ${q.quotationNo}.${body.note ? ' Note: ' + String(body.note).slice(0, 200) : ''}`, q.requestId, 'QUOTATION')
-        await logActivity('QUOTATION_REJECTED', `${q.request.requestCode}: ${q.quotationNo} rejected`, user.id, q.requestId)
-        return ok({ quotation })
-      }
-
-      if (action === 'request_revision') {
-        if (!['SENT', 'NEGOTIATION'].includes(q.status)) {
-          return fail('A revision is already requested or this quotation is closed', 400)
-        }
-        const note = String(body.note || '').trim()
-        if (!note) return fail('Please tell the team what you would like changed', 400)
-        const quotation = await db.quotation.update({
-          where: { id }, data: { status: 'REVISION_REQUESTED', customerNote: note.slice(0, 1000) },
-        })
-        await db.serviceRequest.update({
-          where: { id: q.requestId },
-          data: { status: 'REVISION_REQUESTED', stage: 'QUOTATION', progress: SUGGESTED_PROGRESS.REVISION_REQUESTED ?? 28, pendingAction: 'Team: prepare the requested quotation revision' },
-        })
-        await db.requestStatusHistory.create({
-          data: { requestId: q.requestId, status: 'REVISION_REQUESTED', stage: 'QUOTATION', progress: SUGGESTED_PROGRESS.REVISION_REQUESTED ?? 28, note: `Revision requested on ${q.quotationNo}: ${note.slice(0, 200)}`, createdById: user.id },
-        })
-        await notifyStaff('Quotation revision requested', `${q.request.requestCode}: ${q.quotationNo} — "${note.slice(0, 200)}"`, q.requestId, 'QUOTATION')
-        await logActivity('QUOTATION_REVISION_REQUESTED', `${q.request.requestCode}: revision requested on ${q.quotationNo}`, user.id, q.requestId)
-        return ok({ quotation })
-      }
-
-      return fail('Invalid action', 400)
+    const data = {
+      status: 'CONNECTED',
+      sellerId: sellerIdInput || null,
+      sellerName: profile.sellerName,
+      region: profile.region,
+      marketplaceIds: JSON.stringify(profile.marketplaceIds),
+      accessToken: encryptToken(creds.accessToken),
+      refreshToken: encryptToken(refreshToken),
+      tokenExpiresAt: creds.expiresAt || null,
+      authorizedAt: new Date(),
+      lastSyncError: null,
+      lastSyncAt: null,
+      pendingReturnsReportId: null,
     }
+    const connection = existing
+      ? await db.marketplaceConnection.update({ where: { id: existing.id }, data })
+      : await db.marketplaceConnection.create({ data: { customerId: user.id, marketplace, ...data } })
 
-    return fail('Access denied', 403)
+    const sync = await bootstrapConnection(connection.id)
+
+    await logActivity(
+      'MARKETPLACE_CONNECTED',
+      `Amazon seller account connected via self-authorization refresh token (store: ${profile.sellerName})`,
+      user.id
+    )
+    await notifyStaff(
+      'Amazon account connected',
+      `${user.name} connected their Amazon seller account "${profile.sellerName}" (self-authorization).`
+    )
+
+    return ok({
+      flow: 'refresh_token',
+      connection: connectionView(connection),
+      sync,
+      notice: sync.ok
+        ? `Connected as "${profile.sellerName}". First sync completed: ${sync.ordersSynced} orders, ${sync.listingsSynced} listings.`
+        : `Connected as "${profile.sellerName}", but the first sync reported issues: ${sync.message || sync.warnings?.join(' ') || 'unknown error'}`,
+    })
   } catch (e) {
-    console.error('quotation action failed', e)
-    return fail('Failed to process quotation action', 500)
+    const message = e instanceof Error ? e.message : 'Amazon rejected this refresh token.'
+    await logActivity('MARKETPLACE_CONNECT_ERROR', message.slice(0, 300), user.id)
+    return fail(message, 400)
   }
 }
