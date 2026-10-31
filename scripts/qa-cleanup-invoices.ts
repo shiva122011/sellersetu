@@ -1,0 +1,10 @@
+// One-off cleanup: remove bogus double-taxed QA test invoices (gstRatePct 18 on QA-lifecycle requests)
+import { PrismaClient } from '@prisma/client'
+const db = new PrismaClient()
+const reqs = await db.serviceRequest.findMany({ where: { title: { startsWith: 'QA lifecycle' } }, select: { id: true } })
+const ids = reqs.map((r) => r.id)
+const bad = await db.invoice.findMany({ where: { requestId: { in: ids }, gstRatePct: { gt: 0 } } })
+console.log('found', bad.length, 'bogus invoices:', bad.map((b) => `${b.invoiceNo} ₹${b.totalAmount}`))
+for (const b of bad) await db.invoice.delete({ where: { id: b.id } })
+console.log('deleted.')
+await db.$disconnect()
