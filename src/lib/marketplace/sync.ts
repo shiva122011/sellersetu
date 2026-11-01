@@ -583,9 +583,18 @@ export async function bootstrapConnection(connectionId: string): Promise<SyncRes
 /** Auto-sync: every active connection whose watermark is older than the configured interval. */
 export async function syncDueConnections(): Promise<void> {
   const { db } = await import('@/lib/db')
+  const marketplaceConnection = (db as unknown as {
+    marketplaceConnection?: {
+      findMany: (args: unknown) => Promise<Array<{ id: string }>>
+    }
+  }).marketplaceConnection
+  if (!marketplaceConnection) {
+    console.warn('[marketplace-scheduler] marketplaceConnection delegate is unavailable; skipping tick')
+    return
+  }
   const intervalMinutes = await getAutoSyncIntervalMinutes()
   const cutoff = Date.now() - intervalMinutes * 60 * 1000
-  const due = await db.marketplaceConnection.findMany({
+  const due = await marketplaceConnection.findMany({
     where: {
       autoSyncEnabled: true,
       status: { in: ['CONNECTED', 'ERROR'] },
